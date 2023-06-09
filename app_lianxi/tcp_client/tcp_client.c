@@ -23,9 +23,64 @@
 #pragma comment(lib,"ws2_32.lib")
 
 
+
+#if 1//def WIN32
+int gettimeofday_win(struct timeval *tp, void *tzp)
+{
+  time_t clock;
+  struct tm tm;
+  SYSTEMTIME wtm;
+ 
+  GetLocalTime(&wtm);
+  tm.tm_year   = wtm.wYear  - 1900;
+  tm.tm_mon    = wtm.wMonth - 1;
+  tm.tm_mday   = wtm.wDay;
+  tm.tm_hour   = wtm.wHour;
+  tm.tm_min    = wtm.wMinute;
+  tm.tm_sec    = wtm.wSecond;
+  tm.tm_isdst  = -1;
+ 
+  clock = mktime(&tm);
+  tp->tv_sec   = clock;
+  tp->tv_usec  = wtm.wMilliseconds * 1000;
+  return (0);
+}
+int gettimeofday_tm_win2(struct tm *tm)
+{
+  //struct tm tm;
+  SYSTEMTIME wtm;
+ 
+  GetLocalTime(&wtm);
+  tm->tm_year   = wtm.wYear  - 1900;
+  tm->tm_mon    = wtm.wMonth - 1;
+  tm->tm_mday   = wtm.wDay;
+  tm->tm_hour   = wtm.wHour;
+  tm->tm_min    = wtm.wMinute;
+  tm->tm_sec    = wtm.wSecond;
+  tm->tm_isdst  = -1;
+
+  return (0);
+}
+
+#endif
+
+void lib_strerror(const char * msg)
+{
+    char   buf[128]= {0};
+    int errnum=errno;
+    if(!errnum)
+    {
+        return ;
+    }
+    //strerror_r(errnum,buf,sizeof(buf)-1);
+    printf("%s errno:%d %s\n",msg,errnum,strerror(errnum));
+}
+
+
 #define portnumber 5555 //550
 #define server_ip "127.0.0.1"
 
+char *serverip=NULL;
 int check_buf_data(char *buf,int data_len)
 {
     int ret=0;
@@ -59,29 +114,48 @@ int  unpack(int client_fd, struct FilePackage *rPackage)
 {
     int ret=0;
     static int data_len=0;
+    static char file_name[256]="";
     if(2 == rPackage->ack)
     {
         FILE *fp=NULL;
         if(0 == data_len)
         {
-            fp=fopen(rPackage->filename,"wb");
+            fp=fopen((const char *)file_name,"wb");
         }
         else
-            fp=fopen(rPackage->filename,"ab");
-        data_len+=rPackage->filesize;
-        printf("recv %d,total:%d\n",rPackage->filesize,data_len);
-        
-        fwrite(rPackage->buf,rPackage->filesize,1,fp);
-        fflush(fp);
-        fclose(fp);
+            fp=fopen((const char *)file_name,"ab");
+
+        if(fp)
+        {
+            data_len+=rPackage->filesize;
+            printf("recv %d,total:%d\n",rPackage->filesize,data_len);
+            
+            fwrite(rPackage->buf,rPackage->filesize,1,fp);
+            fflush(fp);
+            fclose(fp);
+        }
+        else
+        {
+            lib_strerror("open file fail");
+        }
     }
     else
     {
-        printf("model:%d\n",rPackage->model);
-        printf("filename:%s,filesize:%d\n",rPackage->filename,rPackage->filesize);
+        
         if(3 == rPackage->ack)
         {
             printf("md5:%s\n",rPackage->buf);
+        }
+        else
+        {
+            struct tm tm ;
+            gettimeofday_tm_win2(&tm);
+            snprintf(file_name,sizeof(file_name)-1,"L%s_%d%02d%02d-%02d.%02d.%02d_%s",serverip,\
+                 1900 + tm.tm_year,1 + tm.tm_mon, tm.tm_mday,
+    		tm.tm_hour, tm.tm_min, tm.tm_sec,rPackage->filename);
+            
+            printf("model:%d\n",rPackage->model);
+            printf("filename:%s,filesize:%d\n",file_name,rPackage->filesize);
         }
         data_len=0;
     }
@@ -122,6 +196,8 @@ int main(int argc ,char **argv)
 		printf("need to enter server ip\n");
 		exit(0);
 	}
+    serverip=argv[1];
+    printf("server ip:%s port:%d\n",serverip,portnumber);
     if((sockfd=socket(AF_INET,SOCK_STREAM,0))<0)
 	{
         int i=WSAGetLastError();
@@ -181,11 +257,11 @@ int main(int argc ,char **argv)
     	FD_SET(sockfd, &except_fds);
     	int st = select(sockfd+1,&read_fds,NULL,&except_fds,NULL);
     	if( st == -1 ){
-    	    printf("fd:%d select fail!", sockfd);
+    	    printf("fd:%d select fail!\n", sockfd);
     	    break;
     	}
     	if( FD_ISSET(sockfd,&except_fds )){
-    	    printf("fd:%d select exception!", sockfd);
+    	    printf("fd:%d select exception!\n", sockfd);
     	    break;
     	}
     	
@@ -204,7 +280,7 @@ int main(int argc ,char **argv)
         	}
             if(data_len != sizeof(struct FilePackage) )
             {
-                printf("should not happen...");
+                printf("should not happen...\n");
                 break;
             }
             st=unpack(sockfd, buf);
